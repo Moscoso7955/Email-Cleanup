@@ -19,11 +19,12 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from html import escape
 from typing import Iterator, Optional
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIStatusError
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -204,6 +205,60 @@ def _thread_first_date(thread: dict) -> datetime:
     return min(datetime.fromtimestamp(int(m.get("internalDate", "0")) / 1000) for m in msgs)
 
 
+_HEX8_RE = re.compile(r"#([0-9a-fA-F]{6})[0-9a-fA-F]{2}\b")
+_HEX4_RE = re.compile(r"#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])[0-9a-fA-F]\b")
+_RGBA_RE = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*[\d.]+\s*\)", re.IGNORECASE)
+_HSLA_RE = re.compile(r"hsla?\([^)]*\)", re.IGNORECASE)
+_VAR_RE = re.compile(r"var\(\s*--[^)]*\)", re.IGNORECASE)
+_CURRENTCOLOR_RE = re.compile(r"\bcurrentcolor\b", re.IGNORECASE)
+
+
+def _hsla_to_hex(match: re.Match) -> str:
+    inner = match.group(0)
+    nums = re.findall(r"[\d.]+", inner)
+    if len(nums) < 3:
+        return "inherit"
+    try:
+        h = float(nums[0]) / 360.0
+        s = float(nums[1].rstrip("%")) / 100.0
+        l = float(nums[2].rstrip("%")) / 100.0
+    except ValueError:
+        return "inherit"
+    import colorsys
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
+
+
+def _rewrite_css_colors(text: str) -> str:
+    """Rewrite color values xhtml2pdf can't parse into ones it can, preserving
+    visual color as much as possible (drop alpha, expand shorthand, convert hsl)."""
+    text = _HEX8_RE.sub(r"#\1", text)
+    text = _HEX4_RE.sub(r"#\1\1\2\2\3\3", text)
+    text = _RGBA_RE.sub(r"rgb(\1, \2, \3)", text)
+    text = _HSLA_RE.sub(_hsla_to_hex, text)
+    text = _VAR_RE.sub("inherit", text)
+    text = _CURRENTCOLOR_RE.sub("inherit", text)
+    return text
+
+
+def _sanitize_message_html(html: str) -> str:
+    """Rewrite unsupported CSS values in <style> blocks and inline style attrs
+    so xhtml2pdf accepts them. Preserves colors, fonts, and layout."""
+    def style_block(m: re.Match) -> str:
+        return f"<style{m.group(1)}>{_rewrite_css_colors(m.group(2))}</style>"
+
+    def style_attr_dq(m: re.Match) -> str:
+        return f'style="{_rewrite_css_colors(m.group(1))}"'
+
+    def style_attr_sq(m: re.Match) -> str:
+        return f"style='{_rewrite_css_colors(m.group(1))}'"
+
+    html = re.sub(r"<style([^>]*)>(.*?)</style>", style_block, html, flags=re.IGNORECASE | re.DOTALL)
+    html = re.sub(r'style="([^"]*)"', style_attr_dq, html, flags=re.IGNORECASE)
+    html = re.sub(r"style='([^']*)'", style_attr_sq, html, flags=re.IGNORECASE)
+    return html
+
+
 def _render_thread_html(thread: dict) -> str:
     subject = _thread_subject(thread)
     parts = [
@@ -215,7 +270,7 @@ def _render_thread_html(thread: dict) -> str:
     ]
     for m in thread.get("messages", []):
         text, html = _extract_body(m.get("payload", {}))
-        body = html if html else f"<pre>{escape(text)}</pre>"
+        body = _sanitize_message_html(html) if html else f"<pre>{escape(text)}</pre>"
         parts.append(
             "<hr/>"
             "<div class='meta'>"
@@ -231,10 +286,11 @@ def _render_thread_html(thread: dict) -> str:
 
 def _html_to_pdf(html: str) -> bytes:
     buf = io.BytesIO()
-    result = pisa.CreatePDF(html, dest=buf, encoding="utf-8")
-    if result.err:
-        raise RuntimeError("xhtml2pdf rendering failed")
-    return buf.getvalue()
+    pisa.CreatePDF(html, dest=buf, encoding="utf-8")
+    data = buf.getvalue()
+    if not data:
+        raise RuntimeError("xhtml2pdf produced empty output")
+    return data
 
 
 # ---------- claude ----------
@@ -245,15 +301,25 @@ def _ask_topic(client: Anthropic, subject: str, sample_text: str) -> str:
         "Output ONLY the topic — no quotes, no punctuation, no preamble.\n\n"
         f"Subject: {subject}\n\nBody excerpt:\n{sample_text[:2000]}"
     )
-    resp = client.messages.create(
-        model=TOPIC_MODEL,
-        max_tokens=40,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = "".join(getattr(b, "text", "") for b in resp.content).strip()
-    text = re.sub(r"[^A-Za-z0-9 \-]", "", text).strip()
-    words = text.split()
-    return " ".join(words[:4]) if words else "Untitled"
+    last_err: Optional[Exception] = None
+    for attempt in range(5):
+        try:
+            resp = client.messages.create(
+                model=TOPIC_MODEL,
+                max_tokens=40,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+            text = re.sub(r"[^A-Za-z0-9 \-]", "", text).strip()
+            words = text.split()
+            return " ".join(words[:4]) if words else "Untitled"
+        except APIStatusError as e:
+            last_err = e
+            if e.status_code in (429, 500, 502, 503, 504, 529):
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    raise last_err if last_err else RuntimeError("topic request failed")
 
 
 def _safe_filename(name: str) -> str:
