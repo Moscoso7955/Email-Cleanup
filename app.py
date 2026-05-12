@@ -123,15 +123,18 @@ def oauth_login():
         prompt="consent",
     )
     session["oauth_state"] = state
+    session["oauth_code_verifier"] = flow.code_verifier
     return redirect(auth_url)
 
 
 @app.route("/oauth/callback")
 def oauth_callback():
     flow = _build_flow(state=session.get("oauth_state"))
+    flow.code_verifier = session.get("oauth_code_verifier")
     flow.fetch_token(authorization_response=request.url)
     session["credentials"] = flow.credentials.to_json()
     session.pop("oauth_state", None)
+    session.pop("oauth_code_verifier", None)
     return redirect(url_for("index"))
 
 
