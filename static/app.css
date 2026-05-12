@@ -36,3 +36,5 @@ a { color: #1a73e8; }
   background: #fff;
 }
 .hint { font-size: 0.85rem; color: #888; }
+.picker-row { display: flex; align-items: center; gap: 0.75rem; }
+.folder-name { color: #555; font-size: 0.95rem; }

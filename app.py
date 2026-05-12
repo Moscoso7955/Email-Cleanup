@@ -1,11 +1,10 @@
 """Correspondence Filer — Flask web UI.
 
-Module 1: OAuth (Web client) + session-backed credentials.
 Routes:
-    GET  /                 — landing page (sign-in or signed-in shell)
-    GET  /oauth/login      — start Google OAuth flow
-    GET  /oauth/callback   — finish OAuth, store creds in session
-    GET  /oauth/logout     — clear session
+    GET  /                  — single-page UI
+    GET  /oauth/{login,callback,logout}
+    GET  /api/labels        — Gmail labels for the dropdown
+    GET  /api/picker-config — API key + OAuth token + app ID for Google Picker
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
+from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
@@ -49,7 +49,24 @@ def current_credentials() -> Credentials | None:
     data = session.get("credentials")
     if not data:
         return None
-    return Credentials.from_authorized_user_info(json.loads(data), SCOPES)
+    creds = Credentials.from_authorized_user_info(json.loads(data), SCOPES)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(GoogleRequest())
+        session["credentials"] = creds.to_json()
+    return creds
+
+
+def _gcp_project_number() -> str | None:
+    """Picker needs the GCP project number (first segment of the Web client ID)."""
+    override = os.environ.get("GOOGLE_APP_ID")
+    if override:
+        return override
+    try:
+        with open(CLIENT_SECRETS_FILE) as f:
+            client_id = json.load(f)["web"]["client_id"]
+        return client_id.split("-", 1)[0]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        return None
 
 
 @app.route("/")
@@ -90,6 +107,20 @@ def api_labels():
     if not creds:
         return jsonify({"error": "not_signed_in"}), 401
     return jsonify({"labels": list_labels(creds)})
+
+
+@app.route("/api/picker-config")
+def api_picker_config():
+    creds = current_credentials()
+    if not creds:
+        return jsonify({"error": "not_signed_in"}), 401
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    app_id = _gcp_project_number()
+    if not api_key:
+        return jsonify({"error": "missing_api_key", "message": "Set GOOGLE_API_KEY in .env"}), 503
+    if not app_id:
+        return jsonify({"error": "missing_app_id", "message": "Couldn't read project number from client_secret_web.json; set GOOGLE_APP_ID in .env"}), 503
+    return jsonify({"api_key": api_key, "access_token": creds.token, "app_id": app_id})
 
 
 if __name__ == "__main__":

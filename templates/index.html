@@ -24,8 +24,17 @@
             <option value="">Loading labels…</option>
           </select>
         </label>
-        <p class="hint">Target folder picker lands in module 3.</p>
+        <div class="field">
+          <span>Target Drive folder</span>
+          <div class="picker-row">
+            <button type="button" id="pick-folder-btn" class="btn">Choose folder…</button>
+            <span id="folder-name" class="folder-name">No folder selected</span>
+          </div>
+          <input type="hidden" id="folder-id" name="folder_id">
+        </div>
+        <p class="hint">Run controls (dates, dry-run, Start) land in module 4.</p>
       </form>
+      <script src="https://apis.google.com/js/api.js"></script>
       <script src="{{ url_for('static', filename='app.js') }}"></script>
     {% endif %}
   </main>
