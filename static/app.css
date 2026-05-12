@@ -25,3 +25,14 @@ a { color: #1a73e8; }
   text-decoration: none;
 }
 .btn:hover { background: #1557b0; }
+.field { display: block; margin: 1rem 0; }
+.field > span { display: block; font-size: 0.9rem; color: #555; margin-bottom: 0.25rem; }
+.field select, .field input {
+  width: 100%;
+  padding: 0.5rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+}
+.hint { font-size: 0.85rem; color: #888; }

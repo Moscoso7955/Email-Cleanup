@@ -14,12 +14,12 @@ import json
 import os
 
 from dotenv import load_dotenv
-from flask import Flask, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
-from filer import SCOPES
+from filer import SCOPES, list_labels
 
 load_dotenv()
 
@@ -82,6 +82,14 @@ def oauth_callback():
 def oauth_logout():
     session.clear()
     return redirect(url_for("index"))
+
+
+@app.route("/api/labels")
+def api_labels():
+    creds = current_credentials()
+    if not creds:
+        return jsonify({"error": "not_signed_in"}), 401
+    return jsonify({"labels": list_labels(creds)})
 
 
 if __name__ == "__main__":

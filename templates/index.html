@@ -17,7 +17,16 @@
       <p>Sign in with Google to file Gmail threads to Drive.</p>
       <p><a class="btn" href="{{ url_for('oauth_login') }}">Sign in with Google</a></p>
     {% else %}
-      <p>Signed in. Label picker and folder picker land in the next module.</p>
+      <form id="filing-form">
+        <label class="field">
+          <span>Gmail label</span>
+          <select id="label-select" required>
+            <option value="">Loading labels…</option>
+          </select>
+        </label>
+        <p class="hint">Target folder picker lands in module 3.</p>
+      </form>
+      <script src="{{ url_for('static', filename='app.js') }}"></script>
     {% endif %}
   </main>
 </body>
