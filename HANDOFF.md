@@ -6,24 +6,60 @@ named `YYYY-MM-DD - Topic.pdf`. One Drive folder per "entity" (Bar Phoebe,
 Sundown, FWPM, Tipsy, ...). Drive layout under each target folder:
 `Thread PDFs/`, `Attachments/`, `Links/`.
 
-## Plan
+## Status
 
-1. **filer.py** — CLI + importable library (`run_filing_job`). DONE.
-2. **app.py** — Flask web app with label dropdown, Google Picker for the
-   target folder, SSE progress stream. NEXT.
-3. **entities.json** — saved `{name, label, folder_id}` per venue so we don't
-   re-pick each time. AFTER 2.
+- **Step 1** — `filer.py` CLI + library. **Done.**
+- **Step 2** — Flask web app (`app.py`, `templates/`, `static/`) with label
+  dropdown, Google Picker, SSE progress. **Done.**
+- **Step 3** — Saved entities (`entities.json`) and a dropdown that
+  auto-fills label + folder. **Done.**
 
-## Step 1 — what exists
+## Files
 
-- `filer.py` — CLI and library.
-- `requirements.txt` — `anthropic`, `google-api-python-client`,
-  `google-auth-oauthlib`, `python-dotenv`, `xhtml2pdf`.
-- `.env.example` — Anthropic key template.
-- `.gitignore` — excludes `.env`, `credentials.json`, `token.json`,
-  `manifest.jsonl`, `.venv/`, `__pycache__/`.
+```
+filer.py                 CLI + library
+app.py                   Flask app
+templates/index.html     UI
+static/app.js            client logic
+static/app.css           styling
+requirements.txt
+.env.example
+.gitignore               ignores secrets, manifest.jsonl, entities.json,
+                         .flask_session/
+HANDOFF.md
+```
 
-### CLI
+## Setup
+
+### Google Cloud Console
+
+Same GCP project for both OAuth clients.
+
+1. Enable APIs: Gmail API, Google Drive API, **Google Picker API**.
+2. **Web OAuth 2.0 client**:
+   - Authorized JavaScript origins: `http://localhost:5000` (plus any
+     forwarded Codespace / hosted URL).
+   - Authorized redirect URIs: `http://localhost:5000/oauth/callback`
+     (plus equivalents).
+   - Download to repo root as `client_secret_web.json` (gitignored).
+3. **API key** (Credentials → Create credentials → API key):
+   - Restrict: API restrictions → "Google Picker API" only.
+   - HTTP referrer restrictions: `http://localhost:5000/*` (plus equivalents).
+4. OAuth consent screen: add your Gmail as a test user. Scopes already
+   needed: `gmail.readonly`, `drive`.
+
+### Local
+
+```sh
+cp .env.example .env       # fill in ANTHROPIC_API_KEY, FLASK_SECRET_KEY, GOOGLE_API_KEY
+pip install -r requirements.txt
+python app.py              # http://localhost:5000
+```
+
+Optional override: `GOOGLE_APP_ID=<gcp project number>` if the project
+number can't be auto-extracted from `client_secret_web.json`.
+
+## CLI
 
 ```
 python filer.py \
@@ -33,23 +69,20 @@ python filer.py \
   [--limit 10] [--dry-run]
 ```
 
-### Library
+## Library entry points
 
 ```python
-from filer import run_filing_job, list_labels
+from filer import run_filing_job, list_labels, SCOPES
 
 for event in run_filing_job(
-    label_id=...,
-    drive_folder_id=...,
+    label_id=..., drive_folder_id=...,
     before=None, after=None, limit=None,
-    dry_run=False,
-    creds=None,                # uses get_credentials() if None
-    anthropic_api_key=None,    # falls back to ANTHROPIC_API_KEY env
+    dry_run=False, creds=None, anthropic_api_key=None,
 ):
     ...
 ```
 
-### Event schema (yielded by `run_filing_job`)
+### Event schema yielded by `run_filing_job`
 
 ```
 {"type": "start",    "label": str, "thread_count": int}
@@ -62,65 +95,52 @@ for event in run_filing_job(
 {"type": "error",    "message": str}   # fatal
 ```
 
-### Auth + scopes
-
-- OAuth scopes: `gmail.readonly` + `drive` (full Drive, chosen so we can
-  `find_or_create_child` on existing user folders).
-- Current `get_credentials()` uses `InstalledAppFlow.run_local_server(port=0)`
-  (Desktop OAuth client) — replace with a Web OAuth flow for step 2.
-
-### PDF rendering
-
-`xhtml2pdf` (pure Python, no native deps). One PDF per thread; all messages
-concatenated with `<hr/>` separators.
-
-### Manifest
-
-`manifest.jsonl` (gitignored). One JSON record per uploaded thread:
-`{thread_id, subject, filename, drive_file_id, filed_at}`. Used to skip
-already-filed threads on re-run.
-
-## Step 2 — Flask web app (next)
-
-Endpoints:
+## Flask routes
 
 | Method/Path | Purpose |
 |---|---|
 | `GET /` | Single-page UI |
-| `GET /api/labels` | List Gmail labels (`filer.list_labels`) |
-| `GET /api/picker-config` | Google API key + OAuth token for Picker JS |
-| `POST /api/run` | Kick off job in background thread, return `job_id` |
-| `GET /api/jobs/<id>/stream` | SSE stream forwarding `run_filing_job` events |
+| `GET /oauth/login` | Start Google OAuth |
+| `GET /oauth/callback` | Finish OAuth, store creds in filesystem session |
+| `GET /oauth/logout` | Clear session |
+| `GET /api/labels` | List Gmail labels |
+| `GET /api/picker-config` | API key + access token + GCP project number for the Picker |
+| `POST /api/run` | Kick off job; returns `{job_id}` |
+| `GET /api/jobs/<id>/stream` | SSE stream of `run_filing_job` events |
+| `GET /api/entities` | List saved entities |
+| `POST /api/entities` | Save a new entity |
+| `DELETE /api/entities/<id>` | Delete a saved entity |
 
-In-memory `{job_id: queue.Queue}` for SSE fan-out — fine for single-user
-local. No DB.
+In-memory `JOBS: dict[job_id, queue.Queue]` for SSE fan-out. Sessions live
+on disk in `.flask_session/`. Entities live in `entities.json` (atomic
+write via tempfile + `os.replace`, threading lock around writes).
 
-### OAuth changes required for step 2
+## Storage files (all gitignored)
 
-- Add a **Web** OAuth client in the same GCP project (Desktop won't work for
-  Picker).
-- Add an OAuth callback handler in `app.py`; store creds in a server-side
-  session.
-- Google Picker needs both an OAuth token (with `drive` scope) and a Google
-  API key (created in the same GCP project, restricted to the Picker API).
+| File | Purpose |
+|---|---|
+| `client_secret_web.json` | Web OAuth client config |
+| `credentials.json` | Desktop OAuth client (CLI only) |
+| `token.json` | CLI-side cached token |
+| `.flask_session/` | Server-side Flask sessions (web OAuth creds) |
+| `manifest.jsonl` | One JSON record per uploaded thread — used to skip re-filing |
+| `entities.json` | `[{id, name, label_id, label_name, folder_id, folder_name}, ...]` |
 
-## Step 3 — multi-entity UX (after step 2)
+## PDF rendering
 
-`entities.json` next to the script:
+`xhtml2pdf` — pure Python, no native deps. One PDF per thread, messages
+concatenated with `<hr/>` separators.
 
-```json
-[
-  {"name": "Bar Phoebe", "label": "13 - Bar Phoebe", "folder_id": "1OwWA0..."},
-  {"name": "Sundown",    "label": "Sundown",         "folder_id": "1XyZ..."}
-]
-```
+## Topic model
 
-Top of UI becomes a "Saved entities" dropdown that auto-fills label + folder.
-"+ Add entity" uses the Picker to capture a new one.
+`claude-haiku-4-5-20251001` — Haiku is plenty for a 2–4 word topic from a
+subject + body excerpt and keeps cost low.
 
-## Deployment
+## Deployment notes
 
-- Develop in Codespace.
-- Deploy to Render or Fly.io free tier.
-- Secrets (`credentials.json`, `ANTHROPIC_API_KEY`) live in env vars, never
-  in the repo.
+- Develop in Codespace; deploy to Render or Fly.io free tier.
+- Secrets (`client_secret_web.json`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`,
+  `FLASK_SECRET_KEY`) live in env vars; never check them in.
+- The dev server's threaded SSE is fine for single-user local. For a
+  production deploy use gunicorn with a gevent/eventlet worker so SSE
+  streams don't tie up a sync worker per client.

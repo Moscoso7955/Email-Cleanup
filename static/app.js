@@ -1,3 +1,5 @@
+let entities = [];
+
 async function loadLabels() {
   const select = document.getElementById("label-select");
   try {
@@ -16,6 +18,99 @@ async function loadLabels() {
     select.innerHTML = `<option value="">Failed to load labels: ${err.message}</option>`;
   }
   updateStartGate();
+}
+
+async function loadEntities() {
+  const select = document.getElementById("entity-select");
+  try {
+    const resp = await fetch("/api/entities");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    entities = data.entities || [];
+    select.innerHTML = '<option value="">— pick saved entity (optional) —</option>';
+    for (const e of entities) {
+      const opt = document.createElement("option");
+      opt.value = e.id;
+      opt.textContent = e.name;
+      select.appendChild(opt);
+    }
+  } catch (err) {
+    select.innerHTML = `<option value="">Failed to load entities: ${err.message}</option>`;
+  }
+}
+
+function applyEntity(id) {
+  const entity = entities.find(e => e.id === id);
+  document.getElementById("delete-entity-btn").hidden = !entity;
+  if (!entity) return;
+
+  const labelSelect = document.getElementById("label-select");
+  labelSelect.value = entity.label_id;
+  if (labelSelect.value !== entity.label_id) {
+    const opt = document.createElement("option");
+    opt.value = entity.label_id;
+    opt.textContent = `${entity.label_name || entity.label_id} (not in your labels)`;
+    labelSelect.appendChild(opt);
+    labelSelect.value = entity.label_id;
+  }
+
+  document.getElementById("folder-id").value = entity.folder_id;
+  const fn = document.getElementById("folder-name");
+  fn.innerHTML = `<b>${escapeHtml(entity.folder_name || entity.folder_id)}</b>`;
+  fn.classList.add("selected");
+
+  updateStartGate();
+}
+
+async function saveEntity() {
+  const labelSelect = document.getElementById("label-select");
+  const folderId = document.getElementById("folder-id").value;
+  const folderName = document.getElementById("folder-name").textContent.trim();
+  if (!labelSelect.value || !folderId) {
+    alert("Pick a Gmail label and a Drive folder first.");
+    return;
+  }
+  const labelName = labelSelect.options[labelSelect.selectedIndex]?.text || "";
+  const name = window.prompt("Entity name (e.g. Bar Phoebe):");
+  if (!name) return;
+
+  const resp = await fetch("/api/entities", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: name.trim(),
+      label_id: labelSelect.value,
+      label_name: labelName,
+      folder_id: folderId,
+      folder_name: folderName,
+    }),
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    alert(`Save failed: ${body.error || resp.status}`);
+    return;
+  }
+  const { entity } = await resp.json();
+  await loadEntities();
+  document.getElementById("entity-select").value = entity.id;
+  document.getElementById("delete-entity-btn").hidden = false;
+}
+
+async function deleteEntity() {
+  const id = document.getElementById("entity-select").value;
+  if (!id) return;
+  const entity = entities.find(e => e.id === id);
+  if (!entity) return;
+  if (!confirm(`Delete saved entity "${entity.name}"?`)) return;
+
+  const resp = await fetch(`/api/entities/${id}`, { method: "DELETE" });
+  if (!resp.ok) {
+    alert(`Delete failed: ${resp.status}`);
+    return;
+  }
+  await loadEntities();
+  document.getElementById("entity-select").value = "";
+  document.getElementById("delete-entity-btn").hidden = true;
 }
 
 let pickerApiLoaded = false;
@@ -94,7 +189,7 @@ function renderEvent(ev) {
     logLine(`<b>Start:</b> ${escapeHtml(ev.label)} — ${ev.thread_count} thread(s)`);
   } else if (ev.type === "thread") {
     const tid = ev.thread_id ? `<code>${escapeHtml(ev.thread_id)}</code>` : "";
-    if (ev.status === "processing") return; // noisy
+    if (ev.status === "processing") return;
     if (ev.status === "uploaded") logLine(`✓ uploaded <b>${escapeHtml(ev.filename)}</b>`, "ok");
     else if (ev.status === "planned") logLine(`· planned <b>${escapeHtml(ev.filename)}</b>`, "muted");
     else if (ev.status === "skipped") logLine(`– skipped ${tid} (${escapeHtml(ev.reason || "")})`, "muted");
@@ -187,5 +282,9 @@ function resetButton() {
 document.getElementById("pick-folder-btn").addEventListener("click", openPicker);
 document.getElementById("filing-form").addEventListener("submit", startRun);
 document.getElementById("label-select").addEventListener("change", updateStartGate);
+document.getElementById("entity-select").addEventListener("change", e => applyEntity(e.target.value));
+document.getElementById("save-entity-btn").addEventListener("click", saveEntity);
+document.getElementById("delete-entity-btn").addEventListener("click", deleteEntity);
 document.getElementById("start-btn").disabled = true;
 loadLabels();
+loadEntities();

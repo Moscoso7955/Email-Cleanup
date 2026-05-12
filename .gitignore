@@ -2,6 +2,7 @@
 credentials.json
 token.json
 client_secret_web.json
+entities.json
 manifest.jsonl
 .flask_session/
 .venv/

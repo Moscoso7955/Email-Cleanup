@@ -43,7 +43,15 @@ a { color: #1a73e8; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; }
 .row .field { flex: 1; min-width: 8rem; }
 .checkbox { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0; }
+.actions { display: flex; gap: 0.75rem; align-items: center; }
 button[disabled] { opacity: 0.6; cursor: not-allowed; }
+.btn-secondary { background: #fff; color: #1a73e8; border: 1px solid #1a73e8; }
+.btn-secondary:hover { background: #f0f6ff; }
+.link-btn {
+  background: none; border: none; color: #c5221f; cursor: pointer;
+  font-size: 0.85rem; padding: 0;
+}
+.link-btn:hover { text-decoration: underline; }
 
 #progress-section { margin-top: 2rem; border-top: 1px solid #eee; padding-top: 1rem; }
 .summary { font-size: 1rem; margin-bottom: 0.5rem; }

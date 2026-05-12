@@ -18,6 +18,16 @@
       <p><a class="btn" href="{{ url_for('oauth_login') }}">Sign in with Google</a></p>
     {% else %}
       <form id="filing-form">
+        <div class="field">
+          <span>Saved entity</span>
+          <div class="picker-row">
+            <select id="entity-select">
+              <option value="">— pick saved entity (optional) —</option>
+            </select>
+            <button type="button" id="delete-entity-btn" class="link-btn" hidden>Delete</button>
+          </div>
+        </div>
+
         <label class="field">
           <span>Gmail label</span>
           <select id="label-select" required>
@@ -54,8 +64,9 @@
           <span>Dry run (plan without uploading)</span>
         </label>
 
-        <p>
+        <p class="actions">
           <button type="submit" id="start-btn" class="btn">Start</button>
+          <button type="button" id="save-entity-btn" class="btn btn-secondary">Save as entity…</button>
         </p>
       </form>
 

@@ -1,12 +1,15 @@
 """Correspondence Filer — Flask web UI.
 
 Routes:
-    GET  /                       — single-page UI
-    GET  /oauth/{login,callback,logout}
-    GET  /api/labels             — Gmail labels for the dropdown
-    GET  /api/picker-config      — API key + OAuth token + app ID for the Picker
-    POST /api/run                — kick off job in background thread, returns job_id
-    GET  /api/jobs/<id>/stream   — SSE stream forwarding run_filing_job events
+    GET    /                       — single-page UI
+    GET    /oauth/{login,callback,logout}
+    GET    /api/labels             — Gmail labels for the dropdown
+    GET    /api/picker-config      — API key + OAuth token + app ID for the Picker
+    POST   /api/run                — kick off job in background thread, returns job_id
+    GET    /api/jobs/<id>/stream   — SSE stream forwarding run_filing_job events
+    GET    /api/entities           — saved entities from entities.json
+    POST   /api/entities           — save a new entity
+    DELETE /api/entities/<id>      — delete a saved entity
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import tempfile
 import threading
 import uuid
 
@@ -42,6 +46,32 @@ Session(app)
 
 JOBS: dict[str, queue.Queue] = {}
 _SENTINEL = object()
+
+ENTITIES_FILE = "entities.json"
+_entities_lock = threading.Lock()
+
+
+def _load_entities() -> list[dict]:
+    if not os.path.exists(ENTITIES_FILE):
+        return []
+    try:
+        with open(ENTITIES_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_entities(entities: list[dict]) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=".entities.", suffix=".json", dir=".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(entities, f, indent=2)
+        os.replace(tmp, ENTITIES_FILE)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def _build_flow(state: str | None = None) -> Flow:
@@ -187,6 +217,46 @@ def api_job_stream(job_id: str):
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/entities", methods=["GET", "POST"])
+def api_entities():
+    if request.method == "GET":
+        return jsonify({"entities": _load_entities()})
+
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    label_id = body.get("label_id")
+    label_name = body.get("label_name")
+    folder_id = body.get("folder_id")
+    folder_name = body.get("folder_name")
+    if not (name and label_id and folder_id):
+        return jsonify({"error": "name, label_id and folder_id are required"}), 400
+
+    entity = {
+        "id": uuid.uuid4().hex,
+        "name": name,
+        "label_id": label_id,
+        "label_name": label_name or "",
+        "folder_id": folder_id,
+        "folder_name": folder_name or "",
+    }
+    with _entities_lock:
+        entities = _load_entities()
+        entities.append(entity)
+        _save_entities(entities)
+    return jsonify({"entity": entity}), 201
+
+
+@app.route("/api/entities/<entity_id>", methods=["DELETE"])
+def api_entity_delete(entity_id: str):
+    with _entities_lock:
+        entities = _load_entities()
+        remaining = [e for e in entities if e.get("id") != entity_id]
+        if len(remaining) == len(entities):
+            return jsonify({"error": "not_found"}), 404
+        _save_entities(remaining)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/picker-config")
