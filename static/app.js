@@ -15,6 +15,7 @@ async function loadLabels() {
   } catch (err) {
     select.innerHTML = `<option value="">Failed to load labels: ${err.message}</option>`;
   }
+  updateStartGate();
 }
 
 let pickerApiLoaded = false;
@@ -67,7 +68,17 @@ function onPicked(data) {
   if (data.action !== google.picker.Action.PICKED) return;
   const folder = data.docs[0];
   document.getElementById("folder-id").value = folder.id;
-  document.getElementById("folder-name").textContent = folder.name;
+  document.getElementById("folder-name").innerHTML = `<b>${escapeHtml(folder.name)}</b>`;
+  document.getElementById("folder-name").classList.add("selected");
+  updateStartGate();
+}
+
+function updateStartGate() {
+  const btn = document.getElementById("start-btn");
+  if (btn.dataset.running === "1") return;
+  const ready = document.getElementById("label-select").value &&
+                document.getElementById("folder-id").value;
+  btn.disabled = !ready;
 }
 
 function logLine(html, cls = "") {
@@ -121,6 +132,7 @@ async function startRun(e) {
   };
 
   const btn = document.getElementById("start-btn");
+  btn.dataset.running = "1";
   btn.disabled = true;
   btn.textContent = "Running…";
   document.getElementById("progress-section").hidden = false;
@@ -167,10 +179,13 @@ async function startRun(e) {
 
 function resetButton() {
   const btn = document.getElementById("start-btn");
-  btn.disabled = false;
+  btn.dataset.running = "0";
   btn.textContent = "Start";
+  updateStartGate();
 }
 
 document.getElementById("pick-folder-btn").addEventListener("click", openPicker);
 document.getElementById("filing-form").addEventListener("submit", startRun);
+document.getElementById("label-select").addEventListener("change", updateStartGate);
+document.getElementById("start-btn").disabled = true;
 loadLabels();

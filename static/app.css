@@ -37,7 +37,9 @@ a { color: #1a73e8; }
 }
 .hint { font-size: 0.85rem; color: #888; }
 .picker-row { display: flex; align-items: center; gap: 0.75rem; }
-.folder-name { color: #555; font-size: 0.95rem; }
+.folder-name { color: #888; font-size: 0.95rem; }
+.folder-name.selected { color: #137333; }
+.folder-name.selected::before { content: "✓ "; }
 .row { display: flex; gap: 1rem; flex-wrap: wrap; }
 .row .field { flex: 1; min-width: 8rem; }
 .checkbox { display: flex; align-items: center; gap: 0.5rem; margin: 1rem 0; }
