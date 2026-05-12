@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Correspondence Filer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Correspondence Filer</h1>
+    {% if signed_in %}
+      <a href="{{ url_for('oauth_logout') }}">Sign out</a>
+    {% endif %}
+  </header>
+  <main>
+    {% if not signed_in %}
+      <p>Sign in with Google to file Gmail threads to Drive.</p>
+      <p><a class="btn" href="{{ url_for('oauth_login') }}">Sign in with Google</a></p>
+    {% else %}
+      <p>Signed in. Label picker and folder picker land in the next module.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

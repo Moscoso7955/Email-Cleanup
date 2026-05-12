@@ -1,7 +1,9 @@
 .env
 credentials.json
 token.json
+client_secret_web.json
 manifest.jsonl
+.flask_session/
 .venv/
 __pycache__/
 *.pyc
