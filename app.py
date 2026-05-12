@@ -1,25 +1,30 @@
 """Correspondence Filer — Flask web UI.
 
 Routes:
-    GET  /                  — single-page UI
+    GET  /                       — single-page UI
     GET  /oauth/{login,callback,logout}
-    GET  /api/labels        — Gmail labels for the dropdown
-    GET  /api/picker-config — API key + OAuth token + app ID for Google Picker
+    GET  /api/labels             — Gmail labels for the dropdown
+    GET  /api/picker-config      — API key + OAuth token + app ID for the Picker
+    POST /api/run                — kick off job in background thread, returns job_id
+    GET  /api/jobs/<id>/stream   — SSE stream forwarding run_filing_job events
 """
 
 from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
+import uuid
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, stream_with_context, url_for
 from flask_session import Session
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
-from filer import SCOPES, list_labels
+from filer import SCOPES, list_labels, run_filing_job
 
 load_dotenv()
 
@@ -34,6 +39,9 @@ app.config["SESSION_TYPE"] = "filesystem"
 app.config["SESSION_FILE_DIR"] = ".flask_session"
 app.config["SESSION_PERMANENT"] = False
 Session(app)
+
+JOBS: dict[str, queue.Queue] = {}
+_SENTINEL = object()
 
 
 def _build_flow(state: str | None = None) -> Flow:
@@ -107,6 +115,78 @@ def api_labels():
     if not creds:
         return jsonify({"error": "not_signed_in"}), 401
     return jsonify({"labels": list_labels(creds)})
+
+
+def _normalize_date(s: str | None) -> str | None:
+    if not s:
+        return None
+    return s.replace("-", "/")
+
+
+def _run_job(job_id: str, creds: Credentials, params: dict) -> None:
+    q = JOBS[job_id]
+    try:
+        for ev in run_filing_job(creds=creds, **params):
+            q.put(ev)
+    except Exception as e:
+        q.put({"type": "error", "message": f"job crashed: {e}"})
+    finally:
+        q.put(_SENTINEL)
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    creds = current_credentials()
+    if not creds:
+        return jsonify({"error": "not_signed_in"}), 401
+
+    body = request.get_json(silent=True) or {}
+    label_id = body.get("label_id")
+    folder_id = body.get("folder_id")
+    if not label_id or not folder_id:
+        return jsonify({"error": "label_id and folder_id are required"}), 400
+
+    limit_raw = body.get("limit")
+    try:
+        limit = int(limit_raw) if limit_raw not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer"}), 400
+
+    params = {
+        "label_id": label_id,
+        "drive_folder_id": folder_id,
+        "before": _normalize_date(body.get("before")),
+        "after": _normalize_date(body.get("after")),
+        "limit": limit,
+        "dry_run": bool(body.get("dry_run")),
+    }
+
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = queue.Queue()
+    threading.Thread(target=_run_job, args=(job_id, creds, params), daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/jobs/<job_id>/stream")
+def api_job_stream(job_id: str):
+    q = JOBS.get(job_id)
+    if q is None:
+        return jsonify({"error": "unknown_job"}), 404
+
+    @stream_with_context
+    def gen():
+        while True:
+            ev = q.get()
+            if ev is _SENTINEL:
+                JOBS.pop(job_id, None)
+                return
+            yield f"data: {json.dumps(ev)}\n\n"
+
+    return Response(
+        gen(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.route("/api/picker-config")

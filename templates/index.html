@@ -24,16 +24,47 @@
             <option value="">Loading labels…</option>
           </select>
         </label>
+
         <div class="field">
           <span>Target Drive folder</span>
           <div class="picker-row">
             <button type="button" id="pick-folder-btn" class="btn">Choose folder…</button>
             <span id="folder-name" class="folder-name">No folder selected</span>
           </div>
-          <input type="hidden" id="folder-id" name="folder_id">
+          <input type="hidden" id="folder-id">
         </div>
-        <p class="hint">Run controls (dates, dry-run, Start) land in module 4.</p>
+
+        <div class="row">
+          <label class="field">
+            <span>After</span>
+            <input type="date" id="after-input">
+          </label>
+          <label class="field">
+            <span>Before</span>
+            <input type="date" id="before-input">
+          </label>
+          <label class="field">
+            <span>Limit</span>
+            <input type="number" id="limit-input" min="1" placeholder="all">
+          </label>
+        </div>
+
+        <label class="checkbox">
+          <input type="checkbox" id="dry-run-input">
+          <span>Dry run (plan without uploading)</span>
+        </label>
+
+        <p>
+          <button type="submit" id="start-btn" class="btn">Start</button>
+        </p>
       </form>
+
+      <section id="progress-section" hidden>
+        <h2>Progress</h2>
+        <div id="summary" class="summary"></div>
+        <ul id="log" class="log"></ul>
+      </section>
+
       <script src="https://apis.google.com/js/api.js"></script>
       <script src="{{ url_for('static', filename='app.js') }}"></script>
     {% endif %}
