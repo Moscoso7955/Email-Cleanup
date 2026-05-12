@@ -205,12 +205,57 @@ def _thread_first_date(thread: dict) -> datetime:
     return min(datetime.fromtimestamp(int(m.get("internalDate", "0")) / 1000) for m in msgs)
 
 
+_HEX8_RE = re.compile(r"#([0-9a-fA-F]{6})[0-9a-fA-F]{2}\b")
+_HEX4_RE = re.compile(r"#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])[0-9a-fA-F]\b")
+_RGBA_RE = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*[\d.]+\s*\)", re.IGNORECASE)
+_HSLA_RE = re.compile(r"hsla?\([^)]*\)", re.IGNORECASE)
+_VAR_RE = re.compile(r"var\(\s*--[^)]*\)", re.IGNORECASE)
+_CURRENTCOLOR_RE = re.compile(r"\bcurrentcolor\b", re.IGNORECASE)
+
+
+def _hsla_to_hex(match: re.Match) -> str:
+    inner = match.group(0)
+    nums = re.findall(r"[\d.]+", inner)
+    if len(nums) < 3:
+        return "inherit"
+    try:
+        h = float(nums[0]) / 360.0
+        s = float(nums[1].rstrip("%")) / 100.0
+        l = float(nums[2].rstrip("%")) / 100.0
+    except ValueError:
+        return "inherit"
+    import colorsys
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return "#{:02x}{:02x}{:02x}".format(int(r * 255), int(g * 255), int(b * 255))
+
+
+def _rewrite_css_colors(text: str) -> str:
+    """Rewrite color values xhtml2pdf can't parse into ones it can, preserving
+    visual color as much as possible (drop alpha, expand shorthand, convert hsl)."""
+    text = _HEX8_RE.sub(r"#\1", text)
+    text = _HEX4_RE.sub(r"#\1\1\2\2\3\3", text)
+    text = _RGBA_RE.sub(r"rgb(\1, \2, \3)", text)
+    text = _HSLA_RE.sub(_hsla_to_hex, text)
+    text = _VAR_RE.sub("inherit", text)
+    text = _CURRENTCOLOR_RE.sub("inherit", text)
+    return text
+
+
 def _sanitize_message_html(html: str) -> str:
-    """Strip CSS that xhtml2pdf can't parse (currentcolor, rgba, var(), hsl,
-    8-char hex, css variables) so it falls back to defaults rather than aborting."""
-    html = re.sub(r"<style\b[^>]*>.*?</style>", "", html, flags=re.IGNORECASE | re.DOTALL)
-    html = re.sub(r'\s(style|class)="[^"]*"', "", html, flags=re.IGNORECASE)
-    html = re.sub(r"\s(style|class)='[^']*'", "", html, flags=re.IGNORECASE)
+    """Rewrite unsupported CSS values in <style> blocks and inline style attrs
+    so xhtml2pdf accepts them. Preserves colors, fonts, and layout."""
+    def style_block(m: re.Match) -> str:
+        return f"<style{m.group(1)}>{_rewrite_css_colors(m.group(2))}</style>"
+
+    def style_attr_dq(m: re.Match) -> str:
+        return f'style="{_rewrite_css_colors(m.group(1))}"'
+
+    def style_attr_sq(m: re.Match) -> str:
+        return f"style='{_rewrite_css_colors(m.group(1))}'"
+
+    html = re.sub(r"<style([^>]*)>(.*?)</style>", style_block, html, flags=re.IGNORECASE | re.DOTALL)
+    html = re.sub(r'style="([^"]*)"', style_attr_dq, html, flags=re.IGNORECASE)
+    html = re.sub(r"style='([^']*)'", style_attr_sq, html, flags=re.IGNORECASE)
     return html
 
 
