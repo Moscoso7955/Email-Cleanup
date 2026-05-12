@@ -27,6 +27,7 @@ from flask_session import Session
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from filer import SCOPES, list_labels, run_filing_job
 
@@ -38,6 +39,7 @@ if os.environ.get("FLASK_ENV") != "production":
 CLIENT_SECRETS_FILE = "client_secret_web.json"
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "dev-change-me")
 app.config["SESSION_TYPE"] = "filesystem"
 app.config["SESSION_FILE_DIR"] = ".flask_session"
