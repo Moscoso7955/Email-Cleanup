@@ -295,6 +295,8 @@ def _rewrite_css_colors(text: str) -> str:
     def _strip_bad_color(m: re.Match) -> str:
         return m.group(1) + 'inherit'
     text = _SAFE_COLOR_RE.sub(_strip_bad_color, text)
+    # Strip border-width/outline-width keyword values that cause 'str - int' errors in xhtml2pdf
+    text = re.sub(r'(?i)\b((?:border(?:-[a-z]+)?-width|outline-width|outline(?:-width)?|line-height|letter-spacing|word-spacing|padding(?:-[a-z]+)?|margin(?:-[a-z]+)?)\s*:\s*)(?:medium|thick|thin|auto|none|normal|initial|unset|revert|inherit|small|large|x-large|xx-large|smaller|larger)', r'\g<1>0px', text, flags=re.MULTILINE)
     # Strip CSS non-color keywords used as color values (e.g. medium, thick, thin)
     text = re.sub(r'(?i)((?:^|;)\s*(?:color|background-color|border-color|border-[a-z]*-color)\s*:\s*)(?:medium|thick|thin|auto|none|normal|initial|unset|revert|small|large|x-large|xx-large|smaller|larger)(\s*(?:;|$))', r'\1inherit\2', text, flags=re.MULTILINE)
     return text
@@ -304,7 +306,7 @@ def _sanitize_message_html(html: str) -> str:
     """Rewrite unsupported CSS values in <style> blocks and inline style attrs
     so xhtml2pdf accepts them. Preserves colors, fonts, and layout."""
     def style_block(m: re.Match) -> str:
-        return f"<style{m.group(1)}>{_rewrite_css_colors(m.group(2))}</style>"
+        return ""  # Strip <style> blocks entirely - xhtml2pdf cannot handle complex CSS selectors
 
     def style_attr_dq(m: re.Match) -> str:
         return f'style="{_rewrite_css_colors(m.group(1))}"'
