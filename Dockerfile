@@ -2,12 +2,14 @@ FROM python:3.12-slim
 
 # Install system deps for pycairo and reportlab
 RUN apt-get update && apt-get install -y \
+    build-essential \
     libcairo2-dev \
     pkg-config \
     python3-dev \
     libpango1.0-dev \
     libffi-dev \
     shared-mime-info \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
