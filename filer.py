@@ -47,6 +47,30 @@ TOPIC_MODEL = "claude-haiku-4-5-20251001"
 
 # ---------- auth ----------
 
+
+# Monkey-patch reportlab to tolerate malformed color sequences from bad CSS
+def _patch_reportlab_colors():
+    try:
+        import reportlab.lib.colors as _rl_colors
+        _orig_toColor = _rl_colors.toColor
+        def _safe_toColor(arg, default=None):
+            try:
+                return _orig_toColor(arg, default)
+            except (AssertionError, Exception):
+                import sys
+                print(f"[color-patch] dropping bad color: {arg!r}", file=sys.stderr)
+                return _rl_colors.white
+        _rl_colors.toColor = _safe_toColor
+        # Also patch xhtml2pdf.util which imports toColor directly
+        try:
+            import xhtml2pdf.util as _x2p_util
+            _x2p_util.toColor = _safe_toColor
+        except Exception:
+            pass
+    except Exception:
+        pass
+_patch_reportlab_colors()
+
 def get_credentials() -> Credentials:
     creds: Optional[Credentials] = None
     if os.path.exists(TOKEN_FILE):
@@ -207,7 +231,7 @@ def _thread_first_date(thread: dict) -> datetime:
 
 _HEX8_RE = re.compile(r"#([0-9a-fA-F]{6})[0-9a-fA-F]{2}\b")
 _HEX4_RE = re.compile(r"#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])[0-9a-fA-F]\b")
-_RGBA_RE = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*[\d.]+\s*\)", re.IGNORECASE)
+_RGBA_RE = re.compile(r"rgba?\([^)]+\)", re.IGNORECASE)
 _HSLA_RE = re.compile(r"hsla?\([^)]*\)", re.IGNORECASE)
 _VAR_RE = re.compile(r"var\(\s*--[^)]*\)", re.IGNORECASE)
 _CURRENTCOLOR_RE = re.compile(r"\bcurrentcolor\b", re.IGNORECASE)
@@ -215,14 +239,22 @@ _CURRENTCOLOR_RE = re.compile(r"\bcurrentcolor\b", re.IGNORECASE)
 
 def _hsla_to_hex(match: re.Match) -> str:
     inner = match.group(0)
-    nums = re.findall(r"[\d.]+", inner)
+    # Strip 'none' keyword (CSS4) and commas, then extract numeric tokens
+    cleaned = re.sub(r'\bnone\b', '0', inner, flags=re.IGNORECASE)
+    nums = re.findall(r"[\d.]+", cleaned)
     if len(nums) < 3:
         return "inherit"
     try:
         h = float(nums[0]) / 360.0
-        s = float(nums[1].rstrip("%")) / 100.0
-        l = float(nums[2].rstrip("%")) / 100.0
-    except ValueError:
+        s_raw = nums[1]
+        l_raw = nums[2]
+        s = float(s_raw.rstrip("%")) / (100.0 if "%" in s_raw or float(s_raw) > 1 else 1.0)
+        l = float(l_raw.rstrip("%")) / (100.0 if "%" in l_raw or float(l_raw) > 1 else 1.0)
+        # clamp to [0,1]
+        h = max(0.0, min(1.0, h))
+        s = max(0.0, min(1.0, s))
+        l = max(0.0, min(1.0, l))
+    except Exception:
         return "inherit"
     import colorsys
     r, g, b = colorsys.hls_to_rgb(h, l, s)
@@ -230,14 +262,41 @@ def _hsla_to_hex(match: re.Match) -> str:
 
 
 def _rewrite_css_colors(text: str) -> str:
+    # Strip CSS attribute selectors xhtml2pdf can't parse, e.g. [style*="font"]
+    text = re.sub(r'\[\w[^\]]*\]', '', text)
     """Rewrite color values xhtml2pdf can't parse into ones it can, preserving
     visual color as much as possible (drop alpha, expand shorthand, convert hsl)."""
     text = _HEX8_RE.sub(r"#\1", text)
     text = _HEX4_RE.sub(r"#\1\1\2\2\3\3", text)
-    text = _RGBA_RE.sub(r"rgb(\1, \2, \3)", text)
+    def _rgba_to_rgb(m: re.Match) -> str:
+        inner = m.group(0)
+        nums = re.findall(r"[\d.]+", inner)
+        if len(nums) < 3:
+            return "inherit"
+        try:
+            r = int(float(nums[0].rstrip("%")) * (2.55 if "%" in inner.split(",")[0] else 1))
+            g = int(float(nums[1].rstrip("%")) * (2.55 if "%" in inner.split(",")[1] else 1))
+            b = int(float(nums[2].rstrip("%")) * (2.55 if len(inner.split(",")) > 2 and "%" in inner.split(",")[2] else 1))
+            r, g, b = max(0,min(255,r)), max(0,min(255,g)), max(0,min(255,b))
+            return f"rgb({r}, {g}, {b})"
+        except Exception:
+            return "inherit"
+    text = _RGBA_RE.sub(_rgba_to_rgb, text)
     text = _HSLA_RE.sub(_hsla_to_hex, text)
     text = _VAR_RE.sub("inherit", text)
     text = _CURRENTCOLOR_RE.sub("inherit", text)
+    # Final safety pass: replace any color value that is NOT #hex, rgb(), or a
+    # simple word (named color) with 'inherit' so reportlab never sees it.
+    _SAFE_COLOR_RE = re.compile(
+        r'((?:^|;)\s*(?:color|background-color|border-color|border-[a-z-]*-color)\s*:\s*)'
+        r'(?!#[0-9a-fA-F]{3,8}\b|rgb\(|rgba\(|[a-zA-Z]+\b)',
+        re.MULTILINE | re.IGNORECASE
+    )
+    def _strip_bad_color(m: re.Match) -> str:
+        return m.group(1) + 'inherit'
+    text = _SAFE_COLOR_RE.sub(_strip_bad_color, text)
+    # Strip CSS non-color keywords used as color values (e.g. medium, thick, thin)
+    text = re.sub(r'(?i)((?:^|;)\s*(?:color|background-color|border-color|border-[a-z]*-color)\s*:\s*)(?:medium|thick|thin|auto|none|normal|initial|unset|revert|small|large|x-large|xx-large|smaller|larger)(\s*(?:;|$))', r'\1inherit\2', text, flags=re.MULTILINE)
     return text
 
 
@@ -256,6 +315,9 @@ def _sanitize_message_html(html: str) -> str:
     html = re.sub(r"<style([^>]*)>(.*?)</style>", style_block, html, flags=re.IGNORECASE | re.DOTALL)
     html = re.sub(r'style="([^"]*)"', style_attr_dq, html, flags=re.IGNORECASE)
     html = re.sub(r"style='([^']*)'", style_attr_sq, html, flags=re.IGNORECASE)
+    # Strip bgcolor/background HTML attrs that confuse xhtml2pdf/reportlab
+    html = re.sub(r' bgcolor=(?:"[^"]*"|[^"\' ][^ >]*)' , '', html, flags=re.IGNORECASE)
+    html = re.sub(r' background=(?:"[^"]*"|[^"\' ][^ >]*)' , '', html, flags=re.IGNORECASE)
     return html
 
 
@@ -336,6 +398,7 @@ def run_filing_job(
     after: Optional[str] = None,
     limit: Optional[int] = None,
     dry_run: bool = False,
+    reupload: bool = False,
     creds: Optional[Credentials] = None,
     anthropic_api_key: Optional[str] = None,
 ) -> Iterator[dict]:
@@ -367,7 +430,7 @@ def run_filing_job(
             try:
                 yield {"type": "thread", "status": "processing", "thread_id": tid}
 
-                if tid in filed:
+                if tid in filed and not reupload:
                     skipped += 1
                     yield {"type": "thread", "status": "skipped", "thread_id": tid, "reason": "already filed"}
                     continue

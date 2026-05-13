@@ -37,6 +37,12 @@ if os.environ.get("FLASK_ENV") != "production":
     os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 CLIENT_SECRETS_FILE = "client_secret_web.json"
+# Write client secret from env var if provided (for Railway deployment)
+_client_secret_b64 = os.environ.get("GOOGLE_CLIENT_SECRET_B64")
+if _client_secret_b64:
+    import base64 as _b64
+    with open(CLIENT_SECRETS_FILE, "w") as _f:
+        _f.write(_b64.b64decode(_client_secret_b64).decode())
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -194,6 +200,7 @@ def api_run():
         "after": _normalize_date(body.get("after")),
         "limit": limit,
         "dry_run": bool(body.get("dry_run")),
+        "reupload": bool(body.get("reupload")),
     }
 
     job_id = uuid.uuid4().hex

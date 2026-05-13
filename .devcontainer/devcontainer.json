@@ -1,0 +1,3 @@
+{
+  "postStartCommand": "bash /workspaces/Email-Cleanup/start_server.sh"
+}

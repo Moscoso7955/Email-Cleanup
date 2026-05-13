@@ -224,6 +224,7 @@ async function startRun(e) {
     before: document.getElementById("before-input").value || null,
     limit: document.getElementById("limit-input").value || null,
     dry_run: document.getElementById("dry-run-input").checked,
+        reupload: document.getElementById("reupload-input").checked,
   };
 
   const btn = document.getElementById("start-btn");
