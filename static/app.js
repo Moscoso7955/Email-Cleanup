@@ -289,3 +289,5 @@ document.getElementById("delete-entity-btn").addEventListener("click", deleteEnt
 document.getElementById("start-btn").disabled = true;
 loadLabels();
 loadEntities();
+  }
+});

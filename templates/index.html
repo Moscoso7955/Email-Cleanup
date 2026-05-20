@@ -45,19 +45,12 @@
           <input type="hidden" id="folder-id">
         </div>
 
-        <div class="row">
-          <label class="field">
-            <span>Starting</span>
-            <input type="date" id="after-input">
-          </label>
-          <label class="field">
-            <span>Ending</span>
-            <input type="date" id="before-input">
-          </label>
-          <label class="field">
-            <span>Limit</span>
-            <input type="number" id="limit-input" min="1" placeholder="all">
-          </label>
+                <div class="field">
+          <span>Date Range</span>
+          <div class="drp-wrap" id="drp-container">
+            <input type="hidden" id="after-input">
+            <input type="hidden" id="before-input">
+          </div>
         </div>
 
         <label class="checkbox">
@@ -82,7 +75,8 @@
       </section>
 
       <script src="https://apis.google.com/js/api.js"></script>
-      <script src="{{ url_for('static', filename='app.js') }}"></script>
+              <script src="{{ url_for('static', filename='date-picker.js') }}"></script>
+        <script src="{{ url_for('static', filename='app.js') }}"></script>
     {% endif %}
   </main>
 </body>
