@@ -42,7 +42,7 @@ _client_secret_b64 = os.environ.get("GOOGLE_CLIENT_SECRET_B64")
 if _client_secret_b64:
     import base64 as _b64
     with open(CLIENT_SECRETS_FILE, "w") as _f:
-        _f.write(_b64.b64decode(_client_secret_b64).decode())
+            _f.write(_b64.b64decode(_client_secret_b64 + '=' * (-len(_client_secret_b64) % 4)).decode())
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
