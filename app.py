@@ -85,12 +85,14 @@ def _save_entities(entities: list[dict]) -> None:
         raise
 
 
-def _build_flow(state: str | None = None) -> Flow:
+def _build_flow(state: str | None = None, redirect_uri: str | None = None) -> Flow:
+    if redirect_uri is None:
+        redirect_uri = url_for("oauth_callback", _external=True)
     return Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE,
         scopes=SCOPES,
         state=state,
-        redirect_uri=url_for("oauth_callback", _external=True),
+        redirect_uri=redirect_uri,
     )
 
 
@@ -125,7 +127,12 @@ def index():
 
 @app.route("/oauth/login")
 def oauth_login():
-    flow = _build_flow()
+    redirect_uri = request.url_root.rstrip('/') + '/oauth/callback'
+    # Ensure https on proxied environments
+    if request.headers.get('X-Forwarded-Proto') == 'https' or request.headers.get('X-Forwarded-Ssl') == 'on':
+        redirect_uri = redirect_uri.replace('http://', 'https://', 1)
+    session['oauth_redirect_uri'] = redirect_uri
+    flow = _build_flow(redirect_uri=redirect_uri)
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
@@ -138,7 +145,8 @@ def oauth_login():
 
 @app.route("/oauth/callback")
 def oauth_callback():
-    flow = _build_flow(state=session.get("oauth_state"))
+    redirect_uri = session.get('oauth_redirect_uri', url_for('oauth_callback', _external=True))
+    flow = _build_flow(state=session.get("oauth_state"), redirect_uri=redirect_uri)
     flow.code_verifier = session.get("oauth_code_verifier")
     flow.fetch_token(authorization_response=request.url)
     session["credentials"] = flow.credentials.to_json()
