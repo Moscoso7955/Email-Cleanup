@@ -1,3 +1,9 @@
 {
-  "postStartCommand": "bash /workspaces/Email-Cleanup/start_server.sh"
+  "postStartCommand": "bash /workspaces/Email-Cleanup/start_server.sh",
+  "portsAttributes": {
+    "5000": {
+      "visibility": "public",
+      "label": "Flask App"
+    }
+  }
 }
