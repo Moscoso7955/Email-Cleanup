@@ -127,11 +127,20 @@ def index():
 
 @app.route("/oauth/login")
 def oauth_login():
-    redirect_uri = request.url_root.rstrip('/') + '/oauth/callback'
-    # Ensure https on proxied environments
-    if request.headers.get('X-Forwarded-Proto') == 'https' or request.headers.get('X-Forwarded-Ssl') == 'on':
-        redirect_uri = redirect_uri.replace('http://', 'https://', 1)
-    session['oauth_redirect_uri'] = redirect_uri
+    # Build redirect_uri reliably using Codespaces env vars if available
+    codespace_name = os.environ.get("CODESPACE_NAME", "")
+    port_fwd_domain = os.environ.get("GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN", "app.github.dev")
+    if codespace_name:
+        redirect_uri = f"https://{codespace_name}-5000.{port_fwd_domain}/oauth/callback"
+    else:
+        # Fallback: build from request, respecting X-Forwarded-Proto
+        scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
+        if scheme == "https" or request.headers.get("X-Forwarded-Ssl") == "on":
+            redirect_uri = "https://" + request.host + "/oauth/callback"
+        else:
+            redirect_uri = request.url_root.rstrip("/") + "/oauth/callback"
+    app.logger.info(f"oauth_login: redirect_uri={redirect_uri}")
+    session["oauth_redirect_uri"] = redirect_uri
     flow = _build_flow(redirect_uri=redirect_uri)
     auth_url, state = flow.authorization_url(
         access_type="offline",
@@ -145,10 +154,20 @@ def oauth_login():
 
 @app.route("/oauth/callback")
 def oauth_callback():
-    redirect_uri = session.get('oauth_redirect_uri', url_for('oauth_callback', _external=True))
+    redirect_uri = session.get("oauth_redirect_uri", url_for("oauth_callback", _external=True))
+    app.logger.info(f"oauth_callback: redirect_uri={redirect_uri}, request.url={request.url}")
     flow = _build_flow(state=session.get("oauth_state"), redirect_uri=redirect_uri)
     flow.code_verifier = session.get("oauth_code_verifier")
-    flow.fetch_token(authorization_response=request.url)
+    try:
+        # Ensure the authorization_response URL uses https (Codespaces proxy strips TLS)
+        auth_response_url = request.url
+        if auth_response_url.startswith("http://"):
+            auth_response_url = "https://" + auth_response_url[7:]
+        app.logger.info(f"oauth_callback: auth_response_url={auth_response_url}")
+        flow.fetch_token(authorization_response=auth_response_url)
+    except Exception as e:
+        app.logger.error(f"oauth_callback fetch_token error: {e}", exc_info=True)
+        return f"OAuth error: {e}", 500
     session["credentials"] = flow.credentials.to_json()
     session.pop("oauth_state", None)
     session.pop("oauth_code_verifier", None)
