@@ -222,7 +222,7 @@ async function startRun(e) {
     folder_id: folderId,
     after: document.getElementById("after-input").value || null,
     before: document.getElementById("before-input").value || null,
-    limit: document.getElementById("limit-input").value || null,
+    limit: document.getElementById("limit-input")?.value || null,
     dry_run: document.getElementById("dry-run-input").checked,
         reupload: document.getElementById("reupload-input").checked,
   };
