@@ -182,22 +182,25 @@ class DateRangePicker {
     this.daysInner.innerHTML = '';
     this.daysInner.style.height = (weeks.length * 32) + 'px';
 
+    let prevMonthKey = null;
     weeks.forEach((week, wi) => {
       const weekEl = document.createElement('div');
       weekEl.className = 'week';
 
-      // Month label cell (first day of week that starts a new month)
+      // Month label cell: label the first week of each new month, using
+      // the Thursday (week[3]) as the canonical "month this week belongs to".
       const labelCell = document.createElement('div');
       labelCell.className = 'day month-label-cell';
       labelCell.style.width = '32px';
-      // Check if this week's Monday is the first day of a new month
-      const mon = week[0];
-      if (mon.getDate() === 1 || wi === 0) {
+      const refDay = week[3];
+      const monthKey = refDay.getFullYear() * 12 + refDay.getMonth();
+      if (monthKey !== prevMonthKey) {
         const mns = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
         const sp = document.createElement('span');
         sp.className = 'month-name';
-        sp.textContent = mns[mon.getMonth()] + " " + String(mon.getFullYear()).slice(2);
+        sp.textContent = mns[refDay.getMonth()] + " " + String(refDay.getFullYear()).slice(2);
         labelCell.appendChild(sp);
+        prevMonthKey = monthKey;
       }
       weekEl.appendChild(labelCell);
 
