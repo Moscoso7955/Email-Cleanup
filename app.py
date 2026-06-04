@@ -37,12 +37,41 @@ if os.environ.get("FLASK_ENV") != "production":
     os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 CLIENT_SECRETS_FILE = "client_secret_web.json"
-# Write client secret from env var if provided (for Railway deployment)
-_client_secret_b64 = os.environ.get("GOOGLE_CLIENT_SECRET_B64")
-if _client_secret_b64:
-    import base64 as _b64
-    with open(CLIENT_SECRETS_FILE, "w") as _f:
-            _f.write(_b64.b64decode(_client_secret_b64.strip(), validate=False).decode())
+
+
+def _write_client_secret_from_env() -> None:
+    """Materialize client_secret_web.json from an env var so deployments don't
+    need to ship the file. Accepts the contents under any of these names, as
+    either raw JSON or base64-encoded JSON."""
+    raw = (
+        os.environ.get("GOOGLE_CLIENT_SECRET")
+        or os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
+        or os.environ.get("GOOGLE_CLIENT_SECRET_B64")
+    )
+    if not raw:
+        return
+    raw = raw.strip()
+    contents: str | None = None
+    if raw.startswith("{"):
+        contents = raw
+    else:
+        import base64 as _b64
+        try:
+            contents = _b64.b64decode(raw + "=" * (-len(raw) % 4), validate=False).decode("utf-8")
+        except Exception as e:
+            print(f"[client_secret] base64 decode failed: {e}", flush=True)
+            return
+    try:
+        json.loads(contents)
+    except Exception as e:
+        print(f"[client_secret] env var is not valid JSON: {e}", flush=True)
+        return
+    with open(CLIENT_SECRETS_FILE, "w") as f:
+        f.write(contents)
+    print(f"[client_secret] wrote {CLIENT_SECRETS_FILE} from env ({len(contents)} bytes)", flush=True)
+
+
+_write_client_secret_from_env()
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
