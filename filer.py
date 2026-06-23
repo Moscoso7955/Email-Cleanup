@@ -117,18 +117,25 @@ def find_or_create_child(drive, parent_id: str, name: str) -> str:
         f"'{parent_id}' in parents and name='{safe}' "
         "and mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    resp = drive.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
+    resp = drive.files().list(
+        q=q,
+        fields="files(id,name)",
+        pageSize=1,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        corpora="allDrives",
+    ).execute()
     files = resp.get("files", [])
     if files:
         return files[0]["id"]
     meta = {"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
-    return drive.files().create(body=meta, fields="id").execute()["id"]
+    return drive.files().create(body=meta, fields="id", supportsAllDrives=True).execute()["id"]
 
 
 def upload_pdf(drive, folder_id: str, filename: str, pdf_bytes: bytes) -> str:
     media = MediaIoBaseUpload(io.BytesIO(pdf_bytes), mimetype="application/pdf", resumable=False)
     meta = {"name": filename, "parents": [folder_id]}
-    return drive.files().create(body=meta, media_body=media, fields="id").execute()["id"]
+    return drive.files().create(body=meta, media_body=media, fields="id", supportsAllDrives=True).execute()["id"]
 
 
 # ---------- manifest ----------
