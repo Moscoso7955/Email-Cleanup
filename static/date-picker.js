@@ -44,6 +44,9 @@ class DateRangePicker {
   _build(container) {
     container.innerHTML = '';
     container.style.position = 'relative';
+    // Re-attach the hidden inputs so app.js can still find them via getElementById
+    container.appendChild(this.afterInput);
+    container.appendChild(this.beforeInput);
 
     // Trigger
     this.trigger = document.createElement('div');
