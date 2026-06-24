@@ -356,12 +356,36 @@ def _render_thread_html(thread: dict) -> str:
 
 
 def _html_to_pdf(html: str) -> bytes:
-    buf = io.BytesIO()
-    pisa.CreatePDF(html, dest=buf, encoding="utf-8")
-    data = buf.getvalue()
-    if not data:
-        raise RuntimeError("xhtml2pdf produced empty output")
-    return data
+    """Render to PDF with progressive fallbacks: full HTML → tables stripped →
+    plain text wrapped in <pre>. Ensures every thread produces *some* PDF."""
+    def _try(src: str) -> bytes:
+        buf = io.BytesIO()
+        try:
+            pisa.CreatePDF(src, dest=buf, encoding="utf-8")
+        except Exception:
+            return b""
+        return buf.getvalue()
+
+    data = _try(html)
+    if data:
+        return data
+
+    # Fallback 1: drop tables (xhtml2pdf chokes on tables whose cell padding
+    # exceeds the available width, producing 'negative availWidth' errors).
+    stripped = re.sub(r"<table\b[^>]*>.*?</table>", "", html, flags=re.IGNORECASE | re.DOTALL)
+    data = _try(stripped)
+    if data:
+        return data
+
+    # Fallback 2: plain text only. Strip every tag, keep text content.
+    text_only = re.sub(r"<[^>]+>", " ", html)
+    text_only = re.sub(r"\s+", " ", text_only)
+    safe = f"<html><body><pre style='font-family:monospace;font-size:10pt;white-space:pre-wrap'>{escape(text_only)}</pre></body></html>"
+    data = _try(safe)
+    if data:
+        return data
+
+    raise RuntimeError("xhtml2pdf produced empty output after all fallbacks")
 
 
 # ---------- claude ----------
