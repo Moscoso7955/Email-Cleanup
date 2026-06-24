@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import gc
 import time
 from datetime import datetime
 from html import escape
@@ -43,6 +44,7 @@ TOKEN_FILE = "token.json"
 MANIFEST_FILE = "manifest.jsonl"
 SUBFOLDERS = ("Thread PDFs", "Attachments", "Links")
 TOPIC_MODEL = "claude-haiku-4-5-20251001"
+_MAX_HTML_BYTES = 150_000  # hard cap per thread to stay within 512 MB
 
 
 # ---------- auth ----------
@@ -310,10 +312,11 @@ def _rewrite_css_colors(text: str) -> str:
 
 
 def _sanitize_message_html(html: str) -> str:
-    """Rewrite unsupported CSS values in <style> blocks and inline style attrs
-    so xhtml2pdf accepts them. Preserves colors, fonts, and layout."""
-    def style_block(m: re.Match) -> str:
-        return ""  # Strip <style> blocks entirely - xhtml2pdf cannot handle complex CSS selectors
+    """Strip heavy/unsupported tags and rewrite CSS so xhtml2pdf accepts the HTML."""
+    # Drop tags that cannot render in xhtml2pdf and only waste memory
+    for tag in ("script", "style", "img", "video", "audio", "object", "embed", "iframe", "noscript"):
+        html = re.sub(rf"<{tag}\b[^>]*>.*?</{tag}>", "", html, flags=re.IGNORECASE | re.DOTALL)
+        html = re.sub(rf"<{tag}\b[^>]*/?>", "", html, flags=re.IGNORECASE)
 
     def style_attr_dq(m: re.Match) -> str:
         return f'style="{_rewrite_css_colors(m.group(1))}"'
@@ -321,17 +324,17 @@ def _sanitize_message_html(html: str) -> str:
     def style_attr_sq(m: re.Match) -> str:
         return f"style='{_rewrite_css_colors(m.group(1))}'"
 
-    html = re.sub(r"<style([^>]*)>(.*?)</style>", style_block, html, flags=re.IGNORECASE | re.DOTALL)
     html = re.sub(r'style="([^"]*)"', style_attr_dq, html, flags=re.IGNORECASE)
     html = re.sub(r"style='([^']*)'", style_attr_sq, html, flags=re.IGNORECASE)
     # Strip bgcolor/background HTML attrs that confuse xhtml2pdf/reportlab
-    html = re.sub(r' bgcolor=(?:"[^"]*"|[^"\' ][^ >]*)' , '', html, flags=re.IGNORECASE)
-    html = re.sub(r' background=(?:"[^"]*"|[^"\' ][^ >]*)' , '', html, flags=re.IGNORECASE)
+    html = re.sub(r' bgcolor=(?:"[^"]*"|[^\'\' ][^ >]*)', '', html, flags=re.IGNORECASE)
+    html = re.sub(r' background=(?:"[^"]*"|[^\'\' ][^ >]*)', '', html, flags=re.IGNORECASE)
     return html
-
-
 def _render_thread_html(thread: dict) -> str:
     subject = _thread_subject(thread)
+    messages = thread.get("messages", [])
+    # Distribute the byte budget evenly across messages (min 10 KB each)
+    per_msg_cap = max(10_000, _MAX_HTML_BYTES // max(len(messages), 1))
     parts = [
         "<html><head><meta charset='utf-8'/>"
         "<style>body{font-family:Helvetica,Arial,sans-serif;font-size:11pt}"
@@ -339,9 +342,15 @@ def _render_thread_html(thread: dict) -> str:
         "hr{border:0;border-top:1px solid #ccc;margin:12pt 0}</style></head><body>",
         f"<h1>{escape(subject)}</h1>",
     ]
-    for m in thread.get("messages", []):
+    for m in messages:
         text, html = _extract_body(m.get("payload", {}))
-        body = _sanitize_message_html(html) if html else f"<pre>{escape(text)}</pre>"
+        if html:
+            # Truncate before sanitizing to avoid processing huge emails
+            if len(html) > per_msg_cap:
+                html = html[:per_msg_cap] + "<!-- truncated -->"
+            body = _sanitize_message_html(html)
+        else:
+            body = f"<pre>{escape(text[:per_msg_cap])}</pre>"
         parts.append(
             "<hr/>"
             "<div class='meta'>"
@@ -353,17 +362,21 @@ def _render_thread_html(thread: dict) -> str:
         )
     parts.append("</body></html>")
     return "".join(parts)
-
-
 def _html_to_pdf(html: str) -> bytes:
-    """Render to PDF with progressive fallbacks: full HTML → tables stripped →
-    plain text wrapped in <pre>. Ensures every thread produces *some* PDF."""
+    """Render to PDF with progressive fallbacks: full HTML -> tables stripped ->
+    plain text wrapped in pre. Ensures every thread produces some PDF."""
+    # Hard cap: if HTML is still too large after per-message truncation, truncate here too
+    if len(html) > _MAX_HTML_BYTES:
+        html = html[:_MAX_HTML_BYTES] + "</body></html>"
+
     def _try(src: str) -> bytes:
         buf = io.BytesIO()
         try:
             pisa.CreatePDF(src, dest=buf, encoding="utf-8")
         except Exception:
             return b""
+        finally:
+            gc.collect()
         return buf.getvalue()
 
     data = _try(html)
@@ -380,16 +393,12 @@ def _html_to_pdf(html: str) -> bytes:
     # Fallback 2: plain text only. Strip every tag, keep text content.
     text_only = re.sub(r"<[^>]+>", " ", html)
     text_only = re.sub(r"\s+", " ", text_only)
-    safe = f"<html><body><pre style='font-family:monospace;font-size:10pt;white-space:pre-wrap'>{escape(text_only)}</pre></body></html>"
+    safe = f"<html><body><pre style='font-family:monospace;font-size:10pt;white-space:pre-wrap'>{escape(text_only[:50_000])}</pre></body></html>"
     data = _try(safe)
     if data:
         return data
 
     raise RuntimeError("xhtml2pdf produced empty output after all fallbacks")
-
-
-# ---------- claude ----------
-
 def _ask_topic(client: Anthropic, subject: str, sample_text: str) -> str:
     prompt = (
         "Give a 2-4 word topic descriptor in Title Case summarizing this email thread. "
@@ -494,6 +503,8 @@ def run_filing_job(
 
                 pdf_bytes = _html_to_pdf(_render_thread_html(thread))
                 file_id = upload_pdf(drive, pdfs_folder, filename, pdf_bytes)
+                del pdf_bytes  # free memory immediately
+                gc.collect()
 
                 append_manifest({
                     "thread_id": tid,
